@@ -1,0 +1,34 @@
+{
+  "name": "@portbay/babel-plugin-loc",
+  "version": "0.1.0",
+  "description": "Dev-time Babel plugin that stamps each JSX host element with its authored source location (data-pb-loc) for PortBay's visual editor.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "portbay",
+    "babel-plugin",
+    "jsx",
+    "tsx",
+    "source-location",
+    "visual-editor",
+    "devtools"
+  ],
+  "peerDependencies": {
+    "@babel/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

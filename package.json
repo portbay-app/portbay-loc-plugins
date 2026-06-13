@@ -1,0 +1,15 @@
+{
+  "name": "portbay-loc-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev-time source-location instrumentation for PortBay's visual editor. Stamps each rendered element with its authored file:line:col (data-pb-loc) so visual edits resolve to the exact source span.",
+  "license": "MIT",
+  "packageManager": "pnpm@11.6.0",
+  "scripts": {
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
+  }
+}

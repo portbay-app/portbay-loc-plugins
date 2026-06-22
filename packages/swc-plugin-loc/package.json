@@ -1,0 +1,36 @@
+{
+  "name": "@portbay/swc-plugin-loc",
+  "version": "0.1.0",
+  "description": "Dev-time SWC plugin that stamps each JSX host element with its authored source location (data-pb-loc) for PortBay's visual editor. SWC/Turbopack parity with @portbay/babel-plugin-loc — covers Next.js App Router.",
+  "type": "module",
+  "main": "portbay_swc_plugin_loc.wasm",
+  "files": [
+    "portbay_swc_plugin_loc.wasm",
+    "src",
+    "scripts",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "portbay",
+    "swc-plugin",
+    "nextjs",
+    "turbopack",
+    "jsx",
+    "tsx",
+    "source-location",
+    "visual-editor",
+    "devtools"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "cargo test --manifest-path Cargo.toml"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "preferUnplugged": true
+}

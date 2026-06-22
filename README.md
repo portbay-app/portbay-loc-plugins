@@ -9,6 +9,7 @@ files instead of guessing with a text search.
 |---|---|---|
 | [`@portbay/vite-plugin-loc`](packages/vite-plugin-loc) | Vite | React/Preact/Solid (JSX/TSX), Vue SFC, Svelte, Astro |
 | [`@portbay/babel-plugin-loc`](packages/babel-plugin-loc) | Babel (CRA / Next babel / webpack) | JSX/TSX |
+| [`@portbay/swc-plugin-loc`](packages/swc-plugin-loc) | SWC / Turbopack | Next.js App Router (JSX/TSX) |
 
 ## What it does
 

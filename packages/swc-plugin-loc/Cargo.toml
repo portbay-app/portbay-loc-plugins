@@ -1,0 +1,27 @@
+[package]
+name = "portbay-swc-plugin-loc"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Empty table: keep this crate out of any ancestor cargo workspace.
+[workspace]
+
+[lib]
+# cdylib -> the wasm32-wasip1 plugin blob Next/Turbopack loads.
+# rlib   -> lets the native `cargo test` harness link the visitor directly.
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+swc_core = { version = "71.0.3", features = ["ecma_plugin_transform"] }
+
+[dev-dependencies]
+swc_core = { version = "71.0.3", features = ["ecma_parser", "ecma_codegen", "common", "ecma_ast", "ecma_visit"] }

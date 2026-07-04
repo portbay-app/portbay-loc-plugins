@@ -17,8 +17,12 @@ This is the **SWC/Turbopack** member of the family, for **Next.js App Router**
 - `file` — project-root-relative, POSIX.
 - `line` — **1-based** line of the element's opening `<`.
 - `col` — **1-based** column of that `<`.
-- Host elements only (lowercase `<div>`, `<button>`, `<my-widget>`). Components
-  (`<Hero>`), member (`<Foo.Bar>`) and namespaced names are never stamped.
+- Host elements (lowercase `<div>`, `<button>`, `<my-widget>`) get `data-pb-loc`.
+  **Component** call sites (`<Hero title="…" />`) get `data-pb-comp` as a prop —
+  React copies it into the component fiber's `memoizedProps`, so PortBay can edit
+  a component's literal props at the JSX call site (see the
+  [repo README](../../README.md#component-call-sites--data-pb-comp-reactjsx-only)).
+  Member (`<Foo.Bar>`) and namespaced names are never stamped.
 - Idempotent, and appended **after** your attributes so a `{...spread}` can never
   override it. A single `.map()` element yields one source loc shared by every
   rendered copy.

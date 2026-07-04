@@ -30,6 +30,9 @@ function assertLocAnchorsAtOpeningBracket(loc, source) {
 const allLocs = (out) =>
   [...out.matchAll(/data-pb-loc="([^"]+)"/g)].map((m) => m[1]);
 
+const allComps = (out) =>
+  [...out.matchAll(/data-pb-comp="([^"]+)"/g)].map((m) => m[1]);
+
 afterEach(() => {
   delete process.env.NODE_ENV;
   delete process.env.PORTBAY_LOC;
@@ -49,7 +52,7 @@ describe('@portbay/babel-plugin-loc', () => {
     expect(out).toContain('className="card"');
   });
 
-  it('stamps host elements but never Components', () => {
+  it('stamps hosts with data-pb-loc and Components with data-pb-comp', () => {
     const code = `const App = () => (
   <Hero>
     <span>x</span>
@@ -57,11 +60,80 @@ describe('@portbay/babel-plugin-loc', () => {
 );`;
     const out = run(code);
     const locs = allLocs(out);
-    // <span> only; <Hero> is a Component.
+    const comps = allComps(out);
+    // <span> is a host -> data-pb-loc; <Hero> is a Component -> data-pb-comp.
     expect(locs).toHaveLength(1);
-    expect(out).toMatch(/<Hero>/); // untouched
+    expect(comps).toHaveLength(1);
+    // The two attributes are distinct — a Component never gets data-pb-loc and
+    // a host never gets data-pb-comp.
+    expect(out).toMatch(/<Hero data-pb-comp=/);
+    expect(out).not.toMatch(/<Hero[^>]*data-pb-loc=/);
     expect(out).toMatch(/<span data-pb-loc=/);
-    locs.forEach((l) => assertLocAnchorsAtOpeningBracket(l, code));
+    expect(out).not.toMatch(/<span[^>]*data-pb-comp=/);
+    // Both coordinates anchor at their own opening `<`.
+    assertLocAnchorsAtOpeningBracket(locs[0], code);
+    assertLocAnchorsAtOpeningBracket(comps[0], code);
+  });
+
+  it('stamps a Component call site at the opening `<` of the Component', () => {
+    const code = `export default function App() {
+  return <Hero title="Welcome" count={3} disabled />;
+}`;
+    const out = run(code);
+    const comps = allComps(out);
+    expect(comps).toHaveLength(1);
+    expect(comps[0]).toMatch(/^src\/App\.jsx:2:\d+$/);
+    assertLocAnchorsAtOpeningBracket(comps[0], code);
+    // The authored props are preserved verbatim — the call-site source that
+    // the editor's prop classifier later reads is untouched.
+    expect(out).toContain('title="Welcome"');
+    expect(out).toContain('count={3}');
+    expect(out).toMatch(/\bdisabled\b/);
+  });
+
+  it('data-pb-comp is appended last so a {...spread} cannot override it', () => {
+    const code = `const A = () => <Hero {...rest} title="x" />;`;
+    const out = run(code);
+    const comps = allComps(out);
+    expect(comps).toHaveLength(1);
+    // The stamped attribute must sit AFTER the spread in emit order.
+    const spreadIdx = out.indexOf('...rest');
+    const compIdx = out.indexOf('data-pb-comp');
+    expect(spreadIdx).toBeGreaterThanOrEqual(0);
+    expect(compIdx).toBeGreaterThan(spreadIdx);
+  });
+
+  it('leaves member-expression and namespaced tags unstamped (v1 gap)', () => {
+    const code = `const A = () => (
+  <Foo.Bar>
+    <ns:widget />
+  </Foo.Bar>
+);`;
+    const out = run(code);
+    expect(allLocs(out)).toHaveLength(0);
+    expect(allComps(out)).toHaveLength(0);
+    expect(out).toMatch(/<Foo\.Bar>/); // untouched
+  });
+
+  it('is idempotent for Components too', () => {
+    const code = `const A = () => <Hero title="x" />;`;
+    const once = run(code);
+    const twice = run(once);
+    expect(allComps(twice)).toHaveLength(1);
+  });
+
+  it('emits no data-pb-comp in production (no opt override)', () => {
+    process.env.NODE_ENV = 'production';
+    const out = transformSync(`const A = () => <Hero title="x" />;`, {
+      filename: '/proj/src/App.jsx',
+      root: '/proj',
+      cwd: '/proj',
+      configFile: false,
+      babelrc: false,
+      parserOpts: { plugins: ['jsx'] },
+      plugins: [[plugin, { root: '/proj' }]],
+    }).code;
+    expect(allComps(out)).toHaveLength(0);
   });
 
   it('stamps each nested host element independently', () => {

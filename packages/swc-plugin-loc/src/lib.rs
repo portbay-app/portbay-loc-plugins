@@ -1,11 +1,24 @@
 //! `@portbay/swc-plugin-loc` — SWC/Turbopack port of the babel/vite loc stamper.
 //!
-//! Stamps every JSX *host* element (a lowercase intrinsic like `<div>`,
-//! `<button>` — never a Component) with `data-pb-loc="<relpath>:<line>:<col>"`,
-//! anchored at the opening `<` in the *authored* source file. This is exact
-//! parity with `@portbay/babel-plugin-loc` / `@portbay/vite-plugin-loc`;
-//! PortBay's Rust resolver reads the attribute to map a clicked rendered node
-//! back to its precise source span. See the repo README for the contract.
+//! Stamps each JSX opening element with its authored source location, anchored
+//! at the opening `<` in the *authored* source file. Exact parity with
+//! `@portbay/babel-plugin-loc` / `@portbay/vite-plugin-loc`:
+//!
+//!   * Host element (lowercase intrinsic `<div>`, `<button>`) —
+//!     `data-pb-loc="<relpath>:<line>:<col>"` (renders a DOM node).
+//!   * Component call site (uppercase `<Hero title="…" />`) —
+//!     `data-pb-comp="<relpath>:<line>:<col>"` (the JSX call site).
+//!
+//! The two use DISTINCT attribute names on purpose. A component renders no DOM
+//! node of its own, so `data-pb-comp` rides as a *prop*: React copies enumerable
+//! props into the component fiber's `memoizedProps`, so PortBay's editor reads
+//! the call-site coordinate off the resolved fiber at runtime — a genuine SOURCE
+//! coordinate needing no runtime sourcemap reversal. PortBay's Rust resolver
+//! reads either attribute to map a rendered node back to its precise source
+//! span. See the repo README for the contract.
+//!
+//! Member (`<Foo.Bar>`) and namespaced (`<svg:rect>`) tags are skipped — an
+//! explicit v1 gap for member/namespaced components.
 //!
 //! Dev-only by design: PortBay only wires the plugin into `next dev`. The gate
 //! also honours an explicit `enabled` config flag and, when that is unset, the
@@ -21,7 +34,8 @@ use swc_core::ecma::ast::{
 };
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
-const ATTR: &str = "data-pb-loc";
+const ATTR_HOST: &str = "data-pb-loc";
+const ATTR_COMP: &str = "data-pb-comp";
 
 /// Plugin config, JSON-decoded from the `.swcrc` / `next.config`
 /// `experimental.swcPlugins` entry.
@@ -60,30 +74,34 @@ pub fn rel_posix(root: &str, filename: &str) -> Option<String> {
     Some(rel)
 }
 
-/// Is this a host element? Only a lowercase plain `JSXIdentifier` (`<div>`,
-/// `<my-widget>`). Uppercase idents are Components; member (`<Foo.Bar>`) and
-/// namespaced names produce no DOM node of their own, so they get no loc.
-fn is_host_tag(name: &JSXElementName) -> bool {
+/// The stamp attribute for a JSX tag, or `None` when the tag is skipped.
+///
+///   * lowercase plain `JSXIdentifier` (`<div>`, `<my-widget>`) => host DOM
+///     node => `data-pb-loc`.
+///   * uppercase plain `JSXIdentifier` (`<Hero>`) => Component call site =>
+///     `data-pb-comp`.
+///   * member (`<Foo.Bar>`) / namespaced (`<svg:rect>`) => `None` (v1 gap).
+fn stamp_attr(name: &JSXElementName) -> Option<&'static str> {
     match name {
-        JSXElementName::Ident(ident) => ident
-            .sym
-            .as_ref()
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase()),
-        _ => false,
+        JSXElementName::Ident(ident) => match ident.sym.as_ref().chars().next() {
+            Some(c) if c.is_ascii_lowercase() => Some(ATTR_HOST),
+            Some(_) => Some(ATTR_COMP),
+            None => None,
+        },
+        _ => None,
     }
 }
 
-/// Idempotency guard: has this element already been stamped?
-fn has_loc_attr(el: &JSXOpeningElement) -> bool {
+/// Idempotency guard: is this element already stamped with `attr`? Host and
+/// component names are distinct, so they never collide.
+fn has_loc_attr(el: &JSXOpeningElement, attr: &str) -> bool {
     el.attrs.iter().any(|a| {
         matches!(
             a,
             JSXAttrOrSpread::JSXAttr(JSXAttr {
                 name: JSXAttrName::Ident(n),
                 ..
-            }) if n.sym.as_ref() == ATTR
+            }) if n.sym.as_ref() == attr
         )
     })
 }
@@ -124,7 +142,10 @@ impl<S: SourceMapper> VisitMut for LocVisitor<'_, S> {
         if !self.enabled || self.rel.is_none() {
             return;
         }
-        if !is_host_tag(&el.name) || has_loc_attr(el) {
+        let Some(attr) = stamp_attr(&el.name) else {
+            return;
+        };
+        if has_loc_attr(el, attr) {
             return;
         }
         let Some(value) = self.loc_value(el.span) else {
@@ -135,7 +156,7 @@ impl<S: SourceMapper> VisitMut for LocVisitor<'_, S> {
         // ordering guarantee the babel plugin makes.
         el.attrs.push(JSXAttrOrSpread::JSXAttr(JSXAttr {
             span: DUMMY_SP,
-            name: JSXAttrName::Ident(IdentName::new(ATTR.into(), DUMMY_SP)),
+            name: JSXAttrName::Ident(IdentName::new(attr.into(), DUMMY_SP)),
             value: Some(JSXAttrValue::Str(Str {
                 span: DUMMY_SP,
                 value: value.into(),
@@ -242,12 +263,12 @@ mod tests {
         String::from_utf8(buf).unwrap()
     }
 
-    /// All `data-pb-loc` values in emit order.
-    fn all_locs(out: &str) -> Vec<String> {
-        let needle = "data-pb-loc=\"";
+    /// All values of `attr` in emit order.
+    fn all_of(out: &str, attr: &str) -> Vec<String> {
+        let needle = format!("{attr}=\"");
         let mut locs = Vec::new();
         let mut rest = out;
-        while let Some(i) = rest.find(needle) {
+        while let Some(i) = rest.find(&needle) {
             rest = &rest[i + needle.len()..];
             if let Some(j) = rest.find('"') {
                 locs.push(rest[..j].to_string());
@@ -257,6 +278,16 @@ mod tests {
             }
         }
         locs
+    }
+
+    /// All `data-pb-loc` (host) values in emit order.
+    fn all_locs(out: &str) -> Vec<String> {
+        all_of(out, "data-pb-loc")
+    }
+
+    /// All `data-pb-comp` (component call-site) values in emit order.
+    fn all_comps(out: &str) -> Vec<String> {
+        all_of(out, "data-pb-comp")
     }
 
     /// Every emitted loc must point exactly at a `<` in the ORIGINAL source —
@@ -286,15 +317,49 @@ mod tests {
     }
 
     #[test]
-    fn stamps_host_never_components() {
+    fn stamps_host_with_loc_and_component_with_comp() {
         let code = "const App = () => (\n  <Hero>\n    <span>x</span>\n  </Hero>\n);";
         let out = run(code, Opts::default());
         let locs = all_locs(&out);
-        assert_eq!(locs.len(), 1, "only <span>; <Hero> is a Component");
+        let comps = all_comps(&out);
+        assert_eq!(locs.len(), 1, "only <span> is a host");
+        assert_eq!(comps.len(), 1, "only <Hero> is a Component");
+        // The two attributes never cross: a Component gets no data-pb-loc and a
+        // host gets no data-pb-comp.
         assert!(!out.contains("Hero data-pb-loc"));
-        for l in &locs {
-            assert_anchor_at_bracket(l, code);
-        }
+        assert!(!out.contains("span data-pb-comp"));
+        assert_anchor_at_bracket(&locs[0], code);
+        assert_anchor_at_bracket(&comps[0], code);
+    }
+
+    #[test]
+    fn stamps_component_call_site_at_bracket() {
+        let code =
+            "export default function App() {\n  return <Hero title=\"Welcome\" count={3} disabled />;\n}";
+        let out = run(code, Opts::default());
+        let comps = all_comps(&out);
+        assert_eq!(comps.len(), 1);
+        assert!(comps[0].starts_with("src/App.jsx:2:"));
+        assert_anchor_at_bracket(&comps[0], code);
+        // Authored props survive verbatim — the source the prop classifier reads.
+        assert!(out.contains("title=\"Welcome\""));
+        assert!(out.contains("count={3}"));
+    }
+
+    #[test]
+    fn skips_member_and_namespaced_tags() {
+        let code = "const A = () => (\n  <Foo.Bar>\n    <ns:widget />\n  </Foo.Bar>\n);";
+        let out = run(code, Opts::default());
+        assert_eq!(all_locs(&out).len(), 0);
+        assert_eq!(all_comps(&out).len(), 0);
+    }
+
+    #[test]
+    fn component_stamp_is_idempotent() {
+        let code = "const A = () => <Hero title=\"x\" />;";
+        let once = run(code, Opts::default());
+        let twice = run(&once, Opts::default());
+        assert_eq!(all_comps(&twice).len(), 1);
     }
 
     #[test]

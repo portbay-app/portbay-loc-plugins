@@ -14,7 +14,7 @@ files instead of guessing with a text search.
 
 ## What it does
 
-Each element carries its origin as a DOM attribute:
+Each **host** element carries its origin as a DOM attribute:
 
 ```html
 <button data-pb-loc="src/components/Hero.jsx:42:7">Get started</button>
@@ -24,6 +24,32 @@ Each element carries its origin as a DOM attribute:
 - `line` — **1-based** line of the element's opening `<` in the authored source.
 - `col` — **1-based** column of that `<` (a tie-breaker; the resolver anchors on
   the line + tag name).
+
+### Component call sites — `data-pb-comp` (React/JSX only)
+
+A React **Component** (`<Hero title="…" />`) renders no DOM node of its own, so
+it cannot carry a DOM attribute. Instead the JSX/TSX stampers stamp the
+**call site** as a prop, `data-pb-comp="<relpath>:<line>:<col>"`, pointing at the
+opening `<` of the `<Hero …>` tag in the authored source:
+
+```jsx
+// authored:  src/App.jsx, line 7
+<Hero title="Welcome" count={3} />
+// compiled (dev):
+jsxDEV(Hero, { title: "Welcome", count: 3, "data-pb-comp": "src/App.jsx:7:3" }, …)
+```
+
+React copies enumerable props into the component fiber's `memoizedProps`
+(verified against react@18.3.1 and react@19.2.5 dev bundles), so PortBay reads
+the call-site coordinate off the resolved component fiber at runtime — a genuine
+**source** coordinate, with no runtime sourcemap reversal. It unlocks editing a
+component's literal props at the JSX call site. Because it is a `data-*` prop, a
+wrapper that spreads `{...props}` onto a host element leaks it to the DOM
+harmlessly and warning-free (React passes `data-*`/`aria-*` through untouched).
+
+`data-pb-comp` is emitted by the **JSX/TSX** stampers only (Babel, Vite-JSX,
+SWC). Member (`<Foo.Bar>`) and namespaced component tags are a v1 gap. Vue and
+Svelte component props are out of scope.
 
 PortBay's resolver opens the authored file at that coordinate, verifies identity
 (the captured original text/class is still present), and patches the one element

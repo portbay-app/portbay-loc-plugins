@@ -1,16 +1,34 @@
 // @portbay/babel-plugin-loc
 //
-// Stamps every JSX *host* element (a lowercase intrinsic like <div>, <li>,
-// <button> — never a Component) with `data-pb-loc="<relpath>:<line>:<col>"`,
-// pointing at the opening `<` in the *authored* source file. PortBay's visual
-// editor reads this attribute to resolve a rendered node to its exact source
-// span. See the repo README for the contract.
+// Stamps each JSX opening element with its authored source location, pointing
+// at the opening `<` in the *authored* source file, so PortBay's visual editor
+// can resolve a rendered node to its exact source span.
+//
+//   Host element (lowercase intrinsic <div>, <li>, <button>)
+//     -> `data-pb-loc="<relpath>:<line>:<col>"`   (renders a DOM node)
+//   Component call site (uppercase <Hero title="…" />)
+//     -> `data-pb-comp="<relpath>:<line>:<col>"`  (the JSX call site)
+//
+// The two use DISTINCT attribute names on purpose. A host element's DOM node
+// carries `data-pb-loc` directly. A component renders no DOM node of its own,
+// so `data-pb-comp` rides as a *prop* on the component: React copies enumerable
+// props into `element.props` -> the fiber's `memoizedProps` (verified against
+// react@18.3.1 and react@19.2.5 dev bundles — jsxDEV builds props by iterating
+// enumerable own-props, and React 19 reuses the config object directly when no
+// `key` is present), so the editor reads the call-site coordinate off the
+// resolved component fiber at runtime — a genuine SOURCE coordinate, needing no
+// runtime sourcemap reversal. If a wrapper component spreads the prop onto a
+// host (`<div {...props}/>`) the value leaks to the DOM as a `data-*`
+// attribute, which is benign and warning-free (React passes `data-*`/`aria-*`
+// through untouched — the same reason `data-pb-loc` on hosts is warning-free).
+// See the repo README for the full contract.
 //
 // Dev-only: nothing is emitted in a production build unless PORTBAY_LOC=1.
 
 import path from 'node:path';
 
-const ATTR = 'data-pb-loc';
+const ATTR_HOST = 'data-pb-loc';
+const ATTR_COMP = 'data-pb-comp';
 
 /** Resolve the dev-only gate. Plugin `enabled` option wins, then PORTBAY_LOC,
  *  then NODE_ENV. */
@@ -48,20 +66,26 @@ export default function portbayBabelPluginLoc(babel) {
 
         const node = nodePath.node;
 
-        // Host elements only: a plain lowercase JSXIdentifier. Components
-        // (uppercase), member names (<Foo.Bar>) and namespaced names produce
-        // no DOM node of their own, so they get no loc.
+        // Only a plain <Ident> tag. Member names (<Foo.Bar>) and namespaced
+        // names (<svg:rect>) are skipped: member/namespaced components are an
+        // explicit v1 gap, and namespaced SVG hosts are stamped by their
+        // ancestor chain in practice.
         const name = node.name;
         if (!t.isJSXIdentifier(name)) return;
         const tag = name.name;
-        if (!/^[a-z]/.test(tag)) return;
 
-        // Idempotent: never double-stamp.
+        // Lowercase intrinsic -> host DOM node -> data-pb-loc.
+        // Anything else (uppercase Component) -> call site -> data-pb-comp.
+        const isHost = /^[a-z]/.test(tag);
+        const attr = isHost ? ATTR_HOST : ATTR_COMP;
+
+        // Idempotent: never double-stamp the SAME attribute (host and comp are
+        // distinct names, so they never collide).
         const already = node.attributes.some(
           (a) =>
             t.isJSXAttribute(a) &&
             t.isJSXIdentifier(a.name) &&
-            a.name.name === ATTR,
+            a.name.name === attr,
         );
         if (already) return;
 
@@ -71,8 +95,10 @@ export default function portbayBabelPluginLoc(babel) {
         const col = (start.column | 0) + 1; // Babel: 0-based -> 1-based of `<`
         const value = `${rel}:${line}:${col}`;
 
+        // Appended last, so a `{...spread}` earlier in the tag can never
+        // override the location we just stamped.
         node.attributes.push(
-          t.jsxAttribute(t.jsxIdentifier(ATTR), t.stringLiteral(value)),
+          t.jsxAttribute(t.jsxIdentifier(attr), t.stringLiteral(value)),
         );
       },
     },

@@ -1,8 +1,12 @@
 # @portbay/babel-plugin-loc
 
-Dev-time Babel plugin that stamps each JSX **host** element with its authored
-source location — `data-pb-loc="<relpath>:<line>:<col>"` — for
-[PortBay](https://portbay.app)'s visual editor.
+Dev-time Babel plugin that stamps each JSX element with its authored source
+location for [PortBay](https://portbay.app)'s visual editor:
+
+- **host** elements (`<div>`, `<button>`) get `data-pb-loc="<relpath>:<line>:<col>"`;
+- **Component** call sites (`<Hero title="…" />`) get `data-pb-comp="<relpath>:<line>:<col>"`
+  as a prop, so PortBay can edit a component's literal props at the JSX call site
+  (see the [repo README](../../README.md#component-call-sites--data-pb-comp-reactjsx-only)).
 
 Use this when your build runs Babel directly (Create React App, a custom
 webpack/Babel pipeline, or Next.js with the Babel pipeline). For Vite, use

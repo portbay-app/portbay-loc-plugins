@@ -81,15 +81,40 @@ Turbopack supports wasm SWC plugins.
 
 ## swc_core ↔ Next compatibility (important)
 
-An SWC wasm plugin is ABI-coupled to the `@swc/core` that loads it. This blob is
-built against **`swc_core 71.0.3`**. If your Next version bundles a `@swc/core`
-outside the compatible range, Next refuses to load the plugin with a version
-error. When that happens, rebuild from source pinned to a `swc_core` that
-matches your Next's `@swc/core` (see the matrix at
-<https://plugins.swc.rs/>), or upgrade Next.
+An SWC wasm plugin is ABI-coupled to the SWC compiler that loads it. The host
+that matters is **`@next/swc`** — the compiler Next.js bundles for `next dev` /
+`next build` — **not** the standalone `@swc/core` on npm (Next does not use it,
+and it lags `@next/swc`). This blob is built against:
 
-PortBay pins and rebuilds this blob per supported Next range; the version above
-is the one shipped in this package.
+| Property | Value |
+|---|---|
+| `swc_core` | `71.0.3` |
+| `swc_ecma_ast` | `25.0.0` |
+| Plugin schema | `__plugin_transform_schema_v1` |
+
+### Verified compatibility (2026-07-04)
+
+| Host | Result |
+|---|---|
+| **Next.js 16.2.x** (webpack lane) | **Works** — `data-pb-loc` stamped in the rendered DOM, byte-accurate |
+| Next.js 16.2.x default (Turbopack) | Path-resolution failure — see the Turbopack note above (out of scope) |
+| Standalone `@swc/core` 1.15.x | Silent no-op — *"AST schema version is not compatible with host's"*, plugin skipped |
+| Standalone `@swc/core` ≤ 1.14.x | Hard error — `failed to invoke plugin` |
+
+### Two failure modes
+
+- **Host older than the blob** → the compile fails loudly (`failed to invoke
+  plugin`).
+- **Host rejects the AST schema** (e.g. standalone `@swc/core`, or a Next that
+  bundles an older `@next/swc`) → the plugin is **silently skipped**: no stamp,
+  no error, `next` reports success. Precise editing then degrades to text search.
+  PortBay's browser bar detects this (installed + configured but no
+  `[data-pb-loc]` in the DOM) and shows a "wired but not active" warning.
+
+When your Next version bundles an `@next/swc` outside this blob's range, rebuild
+from source pinned to a matching `swc_core` (see <https://plugins.swc.rs/>), bump
+the minor, and re-verify. PortBay pins and rebuilds this blob per supported Next
+range; the version above is what ships in this package.
 
 ## Build from source
 

@@ -107,5 +107,23 @@ check('empty => unchanged', $stamp('') === '');
 $out = $stamp("<p>email @@ me</p>\n<div>d</div>");
 check('@@ does not swallow following tag', in_array("$rel:2:1", $locs($out), true));
 
+// --- CROSS-LANGUAGE CONTRACT: this exact fixture + coordinates are mirrored,
+//     byte-for-byte, by the Rust resolver's round-trip tests in the PortBay app
+//     (loc_resolve.rs `plugin_emitted_loc_resolves_blade_elements` and
+//     structural.rs `blade_delete_roundtrips_on_source_line`). If the stamped
+//     (line:col) change here, those Rust tests must change in lockstep, or a
+//     clicked element will resolve to the wrong source span. ---
+$contractRel = 'resources/views/welcome.blade.php';
+$contract = "<div class=\"card\">\n  <h1>Welcome</h1>\n  <ul>\n    "
+    . "@foreach (\$items as \$item)\n      <li class=\"item\">Item</li>\n    "
+    . "@endforeach\n  </ul>\n</div>\n";
+$cout = PbLocStamper::stamp($contract, $contractRel);
+$clocs = $locs($cout);
+check('contract: <div> stamped 1:1', in_array("$contractRel:1:1", $clocs, true), implode(',', $clocs));
+check('contract: <h1> stamped 2:3', in_array("$contractRel:2:3", $clocs, true), implode(',', $clocs));
+check('contract: <ul> stamped 3:3', in_array("$contractRel:3:3", $clocs, true), implode(',', $clocs));
+check('contract: loop <li> stamped 5:7 (one loc for every rendered row)', in_array("$contractRel:5:7", $clocs, true), implode(',', $clocs));
+check('contract: exactly four host elements stamped', count($clocs) === 4, implode(',', $clocs));
+
 echo "\n=== RESULT: $pass passed, $fail failed ===\n";
 exit($fail === 0 ? 0 : 1);

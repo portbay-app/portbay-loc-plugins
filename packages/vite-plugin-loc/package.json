@@ -1,6 +1,6 @@
 {
   "name": "@portbay/vite-plugin-loc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dev-time Vite plugin that stamps rendered elements with their authored source location (data-pb-loc) for PortBay's visual editor. JSX/TSX, Vue, Svelte, Astro.",
   "type": "module",
   "main": "src/index.js",

@@ -39,13 +39,53 @@ function isEnabled(opts) {
   return process.env.NODE_ENV !== 'production';
 }
 
-/** Project-root-relative POSIX path, or null when the file sits outside root
- *  (we never stamp a `..` path the resolver would reject). */
+/** Project-root-relative POSIX path, or null when the file cannot be expressed
+ *  as one (we never stamp a `..` path the resolver would reject).
+ *
+ *  `path.relative` resolves a RELATIVE second argument against `process.cwd()`,
+ *  NOT against `root` — right only by accident when the two are the same
+ *  directory, and silently a `..` path (=> no stamp, no diagnostic) when they
+ *  are not. That is exactly what made the SWC port stamp nothing under
+ *  Turbopack, which hands its plugins already-root-relative filenames. So a
+ *  relative `filename` is taken as root-relative and used as-is.
+ *
+ *  MEASURED: Babel itself resolves `opts.filename` against `cwd` before any
+ *  plugin runs, so through Babel's own API this branch is unreachable — the
+ *  visitor always sees an absolute path (pinned by a test). The handling is
+ *  kept because `relPosix` must not depend on that guarantee holding. */
 function relPosix(root, filename) {
-  if (!filename) return null;
-  let rel = path.relative(root, filename);
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  return rel.split(path.sep).join('/');
+  if (!filename || !root) return null;
+  const rel = path.isAbsolute(filename)
+    ? path.relative(root, filename)
+    : filename;
+  // Normalise separators, drop `.` / empty segments, and resolve `..` against
+  // what we have — refusing the moment one would climb above `root`.
+  const parts = [];
+  for (const seg of rel.split(/[\\/]+/)) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (parts.length === 0) return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(seg);
+  }
+  return parts.length ? parts.join('/') : null;
+}
+
+/** The bail path used to be silent, which is how a dead stamper shipped
+ *  unnoticed. Warn once per process — the visitor only runs on files that
+ *  actually contain JSX, so a refusal here is always worth saying out loud. */
+let warnedNoRel = false;
+function warnNoRel(root, filename) {
+  if (warnedNoRel) return;
+  warnedNoRel = true;
+  console.warn(
+    `[@portbay/babel-plugin-loc] not stamping ${filename || '(no filename)'}: ` +
+      `it does not resolve to a path under root=${JSON.stringify(root)}. ` +
+      `No data-pb-loc will be emitted for it, so PortBay's visual editor ` +
+      `cannot resolve it to source.`,
+  );
 }
 
 export default function portbayBabelPluginLoc(babel) {
@@ -62,7 +102,10 @@ export default function portbayBabelPluginLoc(babel) {
           state.filename ||
           (state.file && state.file.opts && state.file.opts.filename);
         const rel = relPosix(root, filename);
-        if (!rel) return;
+        if (!rel) {
+          warnNoRel(root, filename);
+          return;
+        }
 
         const node = nodePath.node;
 

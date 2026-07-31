@@ -71,17 +71,46 @@ module.exports = {
 **must** be the project root the emitted paths should be relative to (usually
 `__dirname`); files outside it are skipped rather than stamped with a `..` path.
 
-### `next dev --turbo` (Turbopack)
+### Turbopack (the `next dev` default since Next 16)
 
 Turbopack reads the **same** `experimental.swcPlugins` entry — the config above
-covers both pipelines. No separate loader is needed on a Next version whose
-Turbopack supports wasm SWC plugins.
+covers both pipelines. No separate loader is needed.
+
+The two bundlers hand the plugin different filename shapes, and it handles both:
+
+| Bundler | `Filename` context | Handling |
+|---|---|---|
+| webpack / `@swc/core` | absolute (`/proj/app/page.tsx`) | `root` stripped off the front |
+| Turbopack | **already project-root-relative** (`app/page.tsx`) | used as-is |
+
+Both produce identical coordinates. A path that escapes `root` — absolute and
+outside it, or relative and climbing above it — is refused rather than stamped
+with a `..` the resolver would reject.
+
+> **Fixed after 0.1.0.** Before the fix, the relative form was fed to
+> `Path::strip_prefix`, which failed, so the plugin stamped **nothing at all**
+> under Turbopack — silently, with a successful build and an HTTP 200. That is
+> why every bail now emits a warning (below).
 
 > **Version note (verify against your Next version):** wasm SWC plugin support
 > in Turbopack landed during the Next 15 line and is still evolving. On a Next
-> release where Turbopack ignores `swcPlugins`, precise editing silently falls
-> back to the text-search resolver under `--turbo` (zero behavior change, just
-> less precision). PortBay's `loc_detect` reports which pipeline is active.
+> release where Turbopack ignores `swcPlugins` entirely, precise editing falls
+> back to the text-search resolver (zero behavior change, just less precision).
+> PortBay's `loc_detect` reports which pipeline is active.
+
+### When it decides not to stamp, it says so
+
+If the plugin is enabled but cannot turn a file into a root-relative path, it
+emits a warning naming the reason, the configured `root`, and the filename it
+was handed — on the plugin's `HANDLER` diagnostic channel *and* on the wasm
+sandbox's stderr. Two channels because whether a `HANDLER` warning is ever
+printed is the host's decision (`@swc/core`'s Node binding buffers plugin
+diagnostics and drops them when the transform succeeds; stderr gets through).
+
+The commonest cause is a `root` that is not the directory the bundler's
+filenames are relative to. The warning fires per refused file: swc instantiates
+a fresh wasm module per transform, so no plugin-side state survives to
+de-duplicate it.
 
 ## swc_core ↔ Next compatibility (important)
 
@@ -96,13 +125,13 @@ and it lags `@next/swc`). This blob is built against:
 | `swc_ecma_ast` | `25.0.0` |
 | Plugin schema | `__plugin_transform_schema_v1` |
 
-### Verified compatibility (2026-07-04)
+### Verified compatibility
 
 | Host | Result |
 |---|---|
-| **Next.js 16.2.x** (webpack lane) | **Works** — `data-pb-loc` stamped in the rendered DOM, byte-accurate |
-| Next.js 16.2.x default (Turbopack) | Path-resolution failure — see the Turbopack note above (out of scope) |
-| Standalone `@swc/core` 1.15.x | Silent no-op — *"AST schema version is not compatible with host's"*, plugin skipped |
+| **Next.js 16.2.x** (webpack lane) | **Works** (2026-07-04) — `data-pb-loc` stamped in the rendered DOM, byte-accurate |
+| Next.js 16.2.x default (Turbopack) | Was a silent path-resolution failure at 0.1.0; **fixed**, but **not yet re-verified against a live Next 16 dev server** — only against the same relative-filename shape driven through `@swc/core` |
+| **Standalone `@swc/core` 1.15.47** | **Works** (2026-07-31) — loads and stamps; the earlier "AST schema not compatible" no-op no longer reproduces on this version |
 | Standalone `@swc/core` ≤ 1.14.x | Hard error — `failed to invoke plugin` |
 
 ### Two failure modes

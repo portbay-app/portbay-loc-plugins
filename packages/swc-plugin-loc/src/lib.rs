@@ -59,19 +59,125 @@ pub fn resolve_enabled(enabled_cfg: Option<bool>, env: Option<&str>) -> bool {
     enabled_cfg.unwrap_or(env != Some("production"))
 }
 
-/// Project-root-relative POSIX path, or `None` when `filename` sits outside
-/// `root` (we never emit a `..` path the resolver would reject). Mirrors the
-/// babel plugin's `relPosix`.
+/// Why [`rel_posix_checked`] refused to produce a stamp path. Carried so the
+/// plugin entry point can say *which* bail happened instead of no-oping in
+/// silence — a silent bail is exactly how the Turbopack breakage survived
+/// unnoticed (every file transformed, zero elements stamped, HTTP 200).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelRefusal {
+    /// No `root` in the plugin config (the default is "stamp nothing").
+    NoRoot,
+    /// The host gave us no filename for this module.
+    NoFilename,
+    /// An absolute `filename` that does not live under `root`.
+    OutsideRoot,
+    /// A relative `filename` that climbs out of `root` with `..`.
+    EscapesRoot,
+    /// `filename` resolved to `root` itself — no file component to stamp.
+    EmptyPath,
+}
+
+impl RelRefusal {
+    /// One-line explanation, ready to hang off a diagnostic.
+    pub fn why(self) -> &'static str {
+        match self {
+            RelRefusal::NoRoot => {
+                "no `root` was configured, so every file is treated as outside the project"
+            }
+            RelRefusal::NoFilename => "the bundler supplied no filename for this module",
+            RelRefusal::OutsideRoot => "the file is an absolute path outside `root`",
+            RelRefusal::EscapesRoot => "the file is a relative path that climbs above `root`",
+            RelRefusal::EmptyPath => "the file resolved to `root` itself, leaving no relative path",
+        }
+    }
+}
+
+/// Is `p` (already POSIX-normalised) an absolute path? A leading `/`, or a
+/// Windows drive prefix (`C:/…`). The wasm target's [`Path`] only understands
+/// POSIX roots, so the drive form is recognised explicitly rather than being
+/// left to `Path::is_absolute` — otherwise a Windows absolute path would be
+/// mistaken for a relative one and emitted verbatim.
+fn is_absolute_pathish(p: &str) -> bool {
+    if p.starts_with('/') {
+        return true;
+    }
+    let b = p.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
+/// Project-root-relative POSIX path, or a [`RelRefusal`] saying why not.
+///
+/// Bundlers disagree about what `filename` is:
+///
+///   * **webpack** (and `swc` directly) hands over an ABSOLUTE path
+///     (`/proj/app/page.tsx`) — strip `root` off the front.
+///   * **Turbopack** hands over a path that is ALREADY project-root-relative
+///     (`app/page.tsx`) — use it as-is. Feeding that to `strip_prefix` returns
+///     `Err`, which is what made this plugin stamp exactly nothing on every
+///     default Next 16 app.
+///
+/// Either way the result is normalised to POSIX separators and can never
+/// contain a `..` component: PortBay's resolver rejects those outright, so a
+/// path escaping `root` must refuse rather than emit something unusable.
+pub fn rel_posix_checked(root: &str, filename: &str) -> Result<String, RelRefusal> {
+    if filename.is_empty() {
+        return Err(RelRefusal::NoFilename);
+    }
+    if root.is_empty() {
+        return Err(RelRefusal::NoRoot);
+    }
+    // Normalise separators first so a Windows-shaped path is compared and
+    // emitted in the same alphabet as a POSIX one.
+    let file = filename.replace('\\', "/");
+    let root = root.replace('\\', "/");
+    // A trailing slash on `root` would break component-wise prefix matching.
+    let root_trimmed = root.trim_end_matches('/');
+    let root = if root_trimmed.is_empty() {
+        root.as_str()
+    } else {
+        root_trimmed
+    };
+
+    let rel: String = if is_absolute_pathish(&file) {
+        // Absolute (webpack): must genuinely live under `root`. `strip_prefix`
+        // is component-wise, so `/proj` never matches `/project-x`.
+        match Path::new(&file).strip_prefix(root) {
+            Ok(p) => p.to_string_lossy().replace('\\', "/"),
+            Err(_) => return Err(RelRefusal::OutsideRoot),
+        }
+    } else {
+        // Already relative (Turbopack): root-relative by definition.
+        file.clone()
+    };
+
+    // Drop no-op `.` segments, collapse doubled slashes, and resolve `..`
+    // against what we have so far — refusing the moment one would climb above
+    // `root`. The emitted path therefore never contains `..`, which PortBay's
+    // resolver rejects outright.
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in rel.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(RelRefusal::EscapesRoot);
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        return Err(RelRefusal::EmptyPath);
+    }
+    Ok(parts.join("/"))
+}
+
+/// Project-root-relative POSIX path, or `None` when `filename` cannot be
+/// expressed as one (we never emit a `..` path the resolver would reject).
+/// Mirrors the babel plugin's `relPosix`. See [`rel_posix_checked`] for the
+/// reason behind a `None`.
 pub fn rel_posix(root: &str, filename: &str) -> Option<String> {
-    if filename.is_empty() || root.is_empty() {
-        return None;
-    }
-    let rel = Path::new(filename).strip_prefix(root).ok()?;
-    let rel = rel.to_string_lossy().replace('\\', "/");
-    if rel.is_empty() {
-        return None;
-    }
-    Some(rel)
+    rel_posix_checked(root, filename).ok()
 }
 
 /// The stamp attribute for a JSX tag, or `None` when the tag is skipped.
@@ -170,11 +276,80 @@ impl<S: SourceMapper> VisitMut for LocVisitor<'_, S> {
 // Plugin entry point (wasm). Tests below exercise `LocVisitor` directly.
 // ---------------------------------------------------------------------------
 
+use std::io::Write;
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use swc_core::ecma::ast::Program;
+use swc_core::plugin::errors::HANDLER;
 use swc_core::plugin::{
     metadata::TransformPluginMetadataContextKind, plugin_transform,
     proxies::TransformPluginProgramMetadata,
 };
+
+/// One bit per [`RelRefusal`] variant, to keep a misconfiguration from being
+/// reported more than once for the same reason.
+///
+/// MEASURED CAVEAT: swc's plugin runner instantiates a fresh wasm module per
+/// transform, so this static is reset between files and the warning does in
+/// practice fire once per refused file, not once per build. There is no
+/// plugin-side state that survives a transform, so de-duplication across files
+/// is not achievable from in here — and a `root` misconfiguration refuses every
+/// file anyway, which is the condition worth being loud about. The guard is
+/// kept because it is correct for any host that does reuse an instance.
+static WARNED: AtomicU8 = AtomicU8::new(0);
+
+fn refusal_bit(r: RelRefusal) -> u8 {
+    match r {
+        RelRefusal::NoRoot => 1,
+        RelRefusal::NoFilename => 1 << 1,
+        RelRefusal::OutsideRoot => 1 << 2,
+        RelRefusal::EscapesRoot => 1 << 3,
+        RelRefusal::EmptyPath => 1 << 4,
+    }
+}
+
+/// Emit a build warning naming the bail — the thing this plugin used to do
+/// silently, which is how a dead feature shipped unnoticed on every default
+/// Next 16 app.
+///
+/// Two channels, because neither alone is reliable:
+///   * `HANDLER` — the structured, documented plugin diagnostic channel. It
+///     reaches the host through `__emit_diagnostics`, but whether the host
+///     PRINTS a warning is the host's decision (verified: `@swc/core`'s Node
+///     binding buffers it and discards it when the transform succeeds).
+///   * the wasm sandbox's stderr — verified to land on the user's terminal
+///     through `@swc/core`.
+///
+/// `HANDLER` is installed by the `#[plugin_transform]` wrapper, so this is only
+/// ever called from inside the transform — never from the library functions the
+/// native test harness drives.
+fn warn_once(reason: RelRefusal, root: &str, filename: &str) {
+    let bit = refusal_bit(reason);
+    if WARNED.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+        return;
+    }
+    let root = if root.is_empty() { "(unset)" } else { root };
+    let filename = if filename.is_empty() {
+        "(unset)"
+    } else {
+        filename
+    };
+    let msg = format!(
+        "@portbay/swc-plugin-loc: not stamping — {}. root={root:?} filename={filename:?}. \
+         No `data-pb-loc` will be emitted for these files, so PortBay's visual editor cannot \
+         resolve them to source. Set `root` to the project directory the bundler's filenames \
+         are relative to (usually `process.cwd()`).",
+        reason.why()
+    );
+    HANDLER.with(|handler| handler.warn(&msg));
+    // Belt and braces: the host decides whether a plugin's `HANDLER` warning is
+    // ever printed (`@swc/core`'s Node binding buffers diagnostics and drops
+    // them when the transform succeeds), so also write the line to the wasm
+    // sandbox's stderr. `write_all` is used rather than `eprintln!` because the
+    // latter PANICS when the host has not wired up fd 2 — here a closed stderr
+    // is simply a no-op.
+    let _ = std::io::stderr().write_all(format!("warning: {msg}\n").as_bytes());
+}
 
 #[plugin_transform]
 fn process_transform(mut program: Program, metadata: TransformPluginProgramMetadata) -> Program {
@@ -190,7 +365,18 @@ fn process_transform(mut program: Program, metadata: TransformPluginProgramMetad
 
     let enabled = resolve_enabled(config.enabled, env.as_deref());
     let root = config.root.unwrap_or_default();
-    let rel = rel_posix(&root, &filename);
+    let rel = match rel_posix_checked(&root, &filename) {
+        Ok(rel) => Some(rel),
+        Err(reason) => {
+            // Only complain when the plugin was actually meant to be running;
+            // a deliberate `enabled: false` (or a production build) is not a
+            // failure, it is the gate working.
+            if enabled {
+                warn_once(reason, &root, &filename);
+            }
+            None
+        }
+    };
 
     let mut visitor = LocVisitor::new(&metadata.source_map, rel, enabled);
     program.visit_mut_with(&mut visitor);
@@ -205,11 +391,23 @@ mod tests {
     use swc_core::ecma::codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
     use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax, TsSyntax};
 
+    /// Which shape of `filename` the host hands the plugin. Webpack (and swc
+    /// directly) pass an absolute path; Turbopack passes one that is already
+    /// project-root-relative. Both must stamp identical coordinates.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Bundler {
+        /// `/proj/src/App.jsx`
+        Webpack,
+        /// `src/App.jsx`
+        Turbopack,
+    }
+
     struct Opts {
         file: &'static str,
         root: &'static str,
         enabled: bool,
         ts: bool,
+        bundler: Bundler,
     }
 
     impl Default for Opts {
@@ -219,6 +417,7 @@ mod tests {
                 root: "/proj",
                 enabled: true,
                 ts: false,
+                bundler: Bundler::Webpack,
             }
         }
     }
@@ -228,6 +427,12 @@ mod tests {
     fn run(src: &str, opts: Opts) -> String {
         let cm: Lrc<SourceMap> = Default::default();
         let abs = format!("{}/{}", opts.root, opts.file);
+        // Exactly what `TransformPluginMetadataContextKind::Filename` would
+        // carry under each bundler.
+        let host_filename = match opts.bundler {
+            Bundler::Webpack => abs.clone(),
+            Bundler::Turbopack => opts.file.to_string(),
+        };
         let fm = cm.new_source_file(Lrc::new(FileName::Real(abs.clone().into())), src.to_string());
 
         let syntax = if opts.ts {
@@ -245,7 +450,7 @@ mod tests {
         let mut parser = Parser::new_from(lexer);
         let mut module = parser.parse_module().expect("parse");
 
-        let rel = rel_posix(opts.root, &abs);
+        let rel = rel_posix(opts.root, &host_filename);
         let mut v = LocVisitor::new(&*cm, rel, opts.enabled);
         module.visit_mut_with(&mut v);
 
@@ -485,6 +690,161 @@ mod tests {
         assert_eq!(rel_posix("/proj", "/proj"), None); // empty rel
         assert_eq!(rel_posix("", "/proj/x.jsx"), None);
         assert_eq!(rel_posix("/proj", ""), None);
+    }
+
+    // ------------------------------------------------- Turbopack filename shape
+    //
+    // Turbopack hands the plugin a filename that is ALREADY project-root-
+    // relative (`app/page.tsx`); webpack hands over an absolute one. Feeding the
+    // relative form to `strip_prefix` returned `Err`, so the plugin stamped
+    // nothing at all on every default Next 16 app — silently, with a 200
+    // response. These tests pin BOTH shapes so neither can regress into the
+    // other's bail.
+
+    #[test]
+    fn stamps_when_bundler_passes_a_relative_filename() {
+        // The exact shape Turbopack gives a Next App Router page.
+        let code = "export default function Page() {\n  return <div className=\"card\">Hi</div>;\n}";
+        let out = run(
+            code,
+            Opts {
+                file: "app/page.tsx",
+                ts: true,
+                bundler: Bundler::Turbopack,
+                ..Default::default()
+            },
+        );
+        let locs = all_locs(&out);
+        assert_eq!(locs.len(), 1, "Turbopack's relative filename must stamp");
+        // The `app/` prefix must survive — without it the resolver cannot find
+        // the file on disk.
+        assert!(
+            locs[0].starts_with("app/page.tsx:2:"),
+            "expected an app/-prefixed loc, got {:?}",
+            locs[0]
+        );
+        assert_anchor_at_bracket(&locs[0], code);
+    }
+
+    #[test]
+    fn absolute_and_relative_filenames_stamp_identical_coordinates() {
+        let code = "const A = () => (\n  <Hero>\n    <span>x</span>\n  </Hero>\n);";
+        let webpack = run(
+            code,
+            Opts {
+                file: "app/page.tsx",
+                ts: true,
+                bundler: Bundler::Webpack,
+                ..Default::default()
+            },
+        );
+        let turbopack = run(
+            code,
+            Opts {
+                file: "app/page.tsx",
+                ts: true,
+                bundler: Bundler::Turbopack,
+                ..Default::default()
+            },
+        );
+        assert_eq!(all_locs(&webpack), all_locs(&turbopack));
+        assert_eq!(all_comps(&webpack), all_comps(&turbopack));
+        assert_eq!(all_locs(&webpack), vec!["app/page.tsx:3:5"]);
+        assert_eq!(all_comps(&webpack), vec!["app/page.tsx:2:3"]);
+    }
+
+    #[test]
+    fn relative_filename_escaping_root_still_refuses() {
+        // A relative path that climbs out of the project must NOT become a
+        // stamp: the resolver rejects any `..`, so emitting one would turn a
+        // safety refusal into an unusable coordinate.
+        assert_eq!(rel_posix("/proj", "../secrets/App.jsx"), None);
+        assert_eq!(rel_posix("/proj", "app/../../App.jsx"), None);
+
+        let cm: Lrc<SourceMap> = Default::default();
+        let fm = cm.new_source_file(
+            Lrc::new(FileName::Real("../secrets/App.jsx".into())),
+            "const A = () => <div>x</div>;".to_string(),
+        );
+        let lexer = Lexer::new(
+            Syntax::Es(EsSyntax {
+                jsx: true,
+                ..Default::default()
+            }),
+            Default::default(),
+            StringInput::from(&*fm),
+            None,
+        );
+        let mut parser = Parser::new_from(lexer);
+        let mut module = parser.parse_module().unwrap();
+        let mut v = LocVisitor::new(&*cm, rel_posix("/proj", "../secrets/App.jsx"), true);
+        module.visit_mut_with(&mut v);
+
+        let mut buf = Vec::new();
+        {
+            let wr = JsWriter::new(cm.clone(), "\n", &mut buf, None);
+            let mut emitter = Emitter {
+                cfg: CodegenConfig::default(),
+                cm: cm.clone(),
+                comments: None,
+                wr,
+            };
+            emitter.emit_module(&module).unwrap();
+        }
+        assert_eq!(all_locs(&String::from_utf8(buf).unwrap()).len(), 0);
+    }
+
+    #[test]
+    fn rel_posix_checked_reports_why_it_refused() {
+        use RelRefusal::*;
+        assert_eq!(rel_posix_checked("/proj", ""), Err(NoFilename));
+        assert_eq!(rel_posix_checked("", "app/page.tsx"), Err(NoRoot));
+        assert_eq!(
+            rel_posix_checked("/proj", "/elsewhere/App.jsx"),
+            Err(OutsideRoot)
+        );
+        assert_eq!(rel_posix_checked("/proj", "../up.jsx"), Err(EscapesRoot));
+        assert_eq!(rel_posix_checked("/proj", "/proj"), Err(EmptyPath));
+        assert_eq!(rel_posix_checked("/proj", "./"), Err(EmptyPath));
+        // Every refusal carries a human explanation for the build warning.
+        for r in [NoRoot, NoFilename, OutsideRoot, EscapesRoot, EmptyPath] {
+            assert!(!r.why().is_empty());
+        }
+    }
+
+    #[test]
+    fn rel_posix_normalises_separators_and_noise() {
+        // Turbopack shapes.
+        assert_eq!(
+            rel_posix("/proj", "app/page.tsx").as_deref(),
+            Some("app/page.tsx")
+        );
+        assert_eq!(
+            rel_posix("/proj", "./app/page.tsx").as_deref(),
+            Some("app/page.tsx")
+        );
+        assert_eq!(
+            rel_posix("/proj", "app//nested/page.tsx").as_deref(),
+            Some("app/nested/page.tsx")
+        );
+        // A trailing slash on `root` must not break prefix matching.
+        assert_eq!(
+            rel_posix("/proj/", "/proj/app/page.tsx").as_deref(),
+            Some("app/page.tsx")
+        );
+        // Component-wise matching: `/proj` must not claim `/project-x`.
+        assert_eq!(rel_posix("/proj", "/project-x/app/page.tsx"), None);
+        // Windows shapes normalise to POSIX; the drive form counts as absolute
+        // even though the wasm target's `Path` has no concept of it.
+        assert_eq!(
+            rel_posix("C:\\proj", "C:\\proj\\app\\page.tsx").as_deref(),
+            Some("app/page.tsx")
+        );
+        assert_eq!(
+            rel_posix("C:/proj", "app\\page.tsx").as_deref(),
+            Some("app/page.tsx")
+        );
+        assert_eq!(rel_posix("C:/proj", "D:/other/page.tsx"), None);
     }
 
     #[test]

@@ -222,4 +222,78 @@ describe('@portbay/babel-plugin-loc', () => {
     }).code;
     expect(allLocs(out)).toHaveLength(0);
   });
+
+  // ---- Filename shape.
+  //
+  // The SWC port broke under Turbopack because the host handed it a filename
+  // that was ALREADY project-root-relative. Babel cannot reach that state: it
+  // resolves `opts.filename` against `cwd` before any plugin runs, so what the
+  // visitor sees is always absolute (asserted below, so a future Babel change
+  // does not quietly invalidate the reasoning). `relPosix` handles the relative
+  // shape defensively regardless; these tests pin the behaviour that is
+  // actually reachable through Babel's API.
+
+  const bare = (filename, root, cwd = root) =>
+    transformSync(`const A = () => <div>x</div>;`, {
+      filename,
+      root,
+      cwd,
+      configFile: false,
+      babelrc: false,
+      parserOpts: { plugins: ['jsx'] },
+      plugins: [[plugin, { enabled: true, root }]],
+    }).code;
+
+  it('Babel resolves a relative filename to absolute before the plugin runs', () => {
+    let seen;
+    transformSync(`const A = () => <div>x</div>;`, {
+      filename: 'app/page.jsx',
+      root: '/proj',
+      cwd: '/proj',
+      configFile: false,
+      babelrc: false,
+      parserOpts: { plugins: ['jsx'] },
+      plugins: [
+        () => ({
+          visitor: {
+            Program(_p, state) {
+              seen = state.filename;
+            },
+          },
+        }),
+        [plugin, { enabled: true, root: '/proj' }],
+      ],
+    });
+    expect(seen).toBe('/proj/app/page.jsx');
+    expect(path.isAbsolute(seen)).toBe(true);
+  });
+
+  it('a relative filename under cwd===root still stamps root-relative', () => {
+    const locs = allLocs(bare('app/page.jsx', '/proj'));
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatch(/^app\/page\.jsx:1:\d+$/);
+  });
+
+  it('absolute and relative filenames stamp the same coordinates', () => {
+    expect(allLocs(bare('/proj/app/page.jsx', '/proj'))).toEqual(
+      allLocs(bare('app/page.jsx', '/proj')),
+    );
+  });
+
+  it('a filename that climbs above root is refused, never stamped with `..`', () => {
+    expect(allLocs(bare('../secrets/App.jsx', '/proj'))).toHaveLength(0);
+    expect(allLocs(bare('app/../../App.jsx', '/proj'))).toHaveLength(0);
+  });
+
+  it('normalises `.` segments and doubled slashes into a POSIX path', () => {
+    const locs = allLocs(bare('./app//page.jsx', '/proj'));
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatch(/^app\/page\.jsx:1:\d+$/);
+  });
+
+  it('a trailing slash on root does not break prefix matching', () => {
+    const locs = allLocs(bare('/proj/app/page.jsx', '/proj/', '/proj'));
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatch(/^app\/page\.jsx:1:\d+$/);
+  });
 });

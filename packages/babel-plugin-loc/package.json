@@ -1,6 +1,6 @@
 {
   "name": "@portbay/babel-plugin-loc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dev-time Babel plugin that stamps each JSX host element with its authored source location (data-pb-loc) for PortBay's visual editor.",
   "type": "module",
   "main": "src/index.js",

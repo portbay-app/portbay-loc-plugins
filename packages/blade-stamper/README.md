@@ -1,20 +1,19 @@
 # @portbay/blade-stamper (`portbay/blade-stamper`)
 
 Dev-time **Laravel Blade** source-location stamping for PortBay's visual editor.
-It stamps each rendered host element with its authored source location —
-`data-pb-loc="<file>:<line>:<col>"` — so a clicked element resolves back to the
+It stamps each rendered host element with its authored source location,
+`data-pb-loc="<file>:<line>:<col>"`, so a clicked element resolves back to the
 exact span in your `.blade.php` file instead of a text-search guess.
 
 ```html
 <button data-pb-loc="resources/views/home.blade.php:42:7">Get started</button>
 ```
 
-This is the Blade sibling of the JS plugins in this repo
-(`@portbay/vite-plugin-loc`, `@portbay/babel-plugin-loc`,
-`@portbay/swc-plugin-loc`). It emits the **same** `data-pb-loc` shape, so
-PortBay's resolver handles Blade with no client changes: with the attribute
-present you get precise text/class/attribute **and structural** editing; without
-it, PortBay falls back to text-search with zero behavior change.
+This is the Blade sibling of [`@portbay/swc-plugin-loc`](../swc-plugin-loc), and
+it emits the same `data-pb-loc` shape, so PortBay's resolver handles Blade with
+no client changes. With the attribute present you get precise text, class and
+attribute editing, plus structural editing. Without it, PortBay falls back to
+text search with no change in behaviour.
 
 ## How it works (and why it needs no source-map)
 
@@ -23,17 +22,17 @@ is available with its original line numbers. The stamper registers as the
 **first** Blade compilation pass via `Blade::prepareStringsForCompilationUsing`,
 which runs *before* Blade mutates the string (before comment stripping, `@php`
 extraction and `<x-component>` rewriting). Coordinates are read from the pristine
-source and baked in as literal attribute strings — nothing has to be traced back
+source and baked in as literal attribute strings. Nothing has to be traced back
 from compiled output.
 
-A Blade-aware **masking** pass blanks every code region — `{{ }}` / `{!! !!}`
+A Blade-aware **masking** pass blanks every code region: `{{ }}` / `{!! !!}`
 echoes, `{{-- --}}` comments, `<?php … ?>` blocks, `@php … @endphp`,
-`@verbatim`, and `@directive(...)` arguments — so a stray `<` inside a PHP
+`@verbatim`, and `@directive(...)` arguments, so a stray `<` inside a PHP
 expression is never mistaken for an HTML tag. The mask only guides *where not to
 stamp*; inserts are applied to the original text. Over-masking can therefore only
 cause a tag to fall back to text-search (safe) and can never corrupt a template.
 
-Blade component tags (`<x-...>`, `<x-slot>`) are intentionally **not** stamped —
+Blade component tags (`<x-...>`, `<x-slot>`) are intentionally **not** stamped:
 their attributes go to the component's attribute bag, not a literal output tag.
 Their internals are stamped when their own view is compiled.
 
@@ -43,7 +42,7 @@ Their internals are stamped when their own view is compiled.
 composer require --dev portbay/blade-stamper
 ```
 
-Laravel package auto-discovery registers the service provider — **no config
+Laravel package auto-discovery registers the service provider, so **no config
 change needed**. Restart your dev server and clear the compiled views if they
 were cached:
 
@@ -53,10 +52,16 @@ php artisan view:clear
 
 ## Dev-only, by design
 
-The attribute is emitted **only outside production** (`app()->environment()` is
-not `production`). `PORTBAY_LOC=1` forces it on, `PORTBAY_LOC=0` forces it off —
-regardless of environment. It never reaches a production render: no DOM bloat, no
-leaking of local file paths.
+The stamper runs only outside production, checking `app()->environment()`. Leave
+it alone and nothing reaches a production render: no extra DOM, no source paths
+in shipped HTML.
+
+> **`PORTBAY_LOC=1` overrides that check, and `PORTBAY_LOC=0` disables the
+> stamper anywhere.** The override exists so you can debug the stamper in an
+> environment that reports itself as production, and it is not safe to leave on.
+> Anything you serve with it set publishes your view file names, your directory
+> layout and your line numbers to whoever loads the page. Use it on a machine you
+> control, then unset it.
 
 ## Requirements
 
@@ -68,7 +73,7 @@ leaking of local file paths.
 ## Test
 
 ```bash
-composer test   # php test/StampTest.php — pure-PHP unit tests, no Laravel needed
+composer test   # php test/StampTest.php, pure-PHP unit tests, no Laravel needed
 ```
 
 ## License

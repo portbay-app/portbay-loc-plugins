@@ -1,43 +1,41 @@
 # @portbay/swc-plugin-loc
 
-Dev-time **SWC plugin** that stamps each rendered JSX host element with its
-**authored source location** — `data-pb-loc="<file>:<line>:<col>"` — so
-PortBay's visual editor can resolve a clicked element back to the exact span in
-your source instead of guessing with a text search.
+An SWC plugin that stamps every rendered JSX host element with the place it was
+written, `data-pb-loc="<file>:<line>:<col>"`, so PortBay's visual editor can open
+the exact span you clicked. It runs in development only.
 
-This is the **SWC/Turbopack** member of the family, for **Next.js App Router**
-(which compiles with SWC by default, not Babel). It is byte-for-byte parity with
-[`@portbay/babel-plugin-loc`](../babel-plugin-loc) and
-[`@portbay/vite-plugin-loc`](../vite-plugin-loc):
+Next.js compiles with SWC rather than Babel, so this is the plugin Next projects
+want. PortBay covers Vite, Astro, Vue and Svelte by injecting its own plugin into
+the dev server it launches, with nothing for you to install.
 
 ```html
 <button data-pb-loc="app/page.tsx:42:7">Get started</button>
 ```
 
-- `file` — project-root-relative, POSIX.
-- `line` — **1-based** line of the element's opening `<`.
-- `col` — **1-based** column of that `<`.
-- Host elements (lowercase `<div>`, `<button>`, `<my-widget>`) get `data-pb-loc`.
-  **Component** call sites (`<Hero title="…" />`) get `data-pb-comp` as a prop —
-  React copies it into the component fiber's `memoizedProps`, so PortBay can edit
-  a component's literal props at the JSX call site (see the
-  [repo README](../../README.md#component-call-sites--data-pb-comp-reactjsx-only)).
-  Member (`<Foo.Bar>`) and namespaced names are never stamped.
-- Idempotent, and appended **after** your attributes so a `{...spread}` can never
-  override it. A single `.map()` element yields one source loc shared by every
-  rendered copy.
+`file` is project-root-relative and POSIX. `line` and `col` are 1-based and point
+at the element's opening `<`.
 
-## Dev-only, by design
+Lowercase host elements (`<div>`, `<button>`, `<my-widget>`) get `data-pb-loc`.
+Component call sites like `<Hero title="…" />` render no DOM node, so they get
+`data-pb-comp` as a prop instead; React copies it into the fiber's
+`memoizedProps`, which lets PortBay edit a component's literal props where you
+wrote them. See the [repo README](../../README.md#component-call-sites-react-and-jsx-only).
+Member tags (`<Foo.Bar>`) and namespaced names are never stamped.
 
-The attribute is emitted only in development. PortBay wires the plugin into
-`next dev` and removes it otherwise; the plugin also self-gates on `NODE_ENV`
-(`production` ⇒ off) when no explicit `enabled` flag is passed. It never reaches
-a production bundle — no DOM bloat, no leaking of local file paths.
+The stamp is idempotent and lands after your own attributes, so a `{...spread}`
+cannot overwrite it. One element inside `.map()` yields a single source location
+shared by every copy it renders.
 
-> Unlike the Babel/Vite plugins, there is no `PORTBAY_LOC` env escape hatch: SWC
-> plugins run in a sandboxed wasm VM with no access to `process.env`. Pass
-> `enabled: true`/`false` through plugin config instead (PortBay does this for
-> you).
+## Development only
+
+PortBay wires the plugin into `next dev` and leaves it out otherwise. When you
+pass no explicit `enabled` flag the plugin gates itself on `NODE_ENV`, treating
+`production` as off. Nothing reaches a production bundle: no extra DOM, no source
+paths in shipped HTML.
+
+There is no `PORTBAY_LOC` escape hatch here, unlike the Blade stamper. SWC
+plugins run inside a sandboxed wasm VM that cannot read `process.env`. Pass
+`enabled: true` or `false` through plugin config, which PortBay does for you.
 
 ## Install
 
@@ -45,10 +43,10 @@ a production bundle — no DOM bloat, no leaking of local file paths.
 pnpm add -D @portbay/swc-plugin-loc
 ```
 
-The package ships a prebuilt `portbay_swc_plugin_loc.wasm`; **no Rust toolchain
-is required to consume it**. (Building from source does — see below.)
+The package ships a prebuilt `portbay_swc_plugin_loc.wasm`, so consuming it needs
+no Rust toolchain. Building from source does.
 
-### Config — one entry, both bundlers
+### Config, one entry for both bundlers
 
 ```js
 // next.config.js
@@ -65,65 +63,63 @@ module.exports = {
 };
 ```
 
-The first element **must be the bare package specifier**, not
+Pass the bare package specifier as the first element, never
 `require.resolve('@portbay/swc-plugin-loc')`. `require.resolve` returns an
-absolute filesystem path, and Turbopack resolves the `swcPlugins` entry as a
-*module specifier*: on Next 16.3.0 an absolute path fails the compile outright
-with `Module not found: … server relative imports are not implemented yet`.
-The bare specifier is resolved correctly by **both** Turbopack and webpack, so
-there is no pipeline that wants the `require.resolve` form.
+absolute filesystem path, and Turbopack reads that entry as a module specifier,
+so on Next 16.3.0 an absolute path fails the compile outright with `Module not
+found: … server relative imports are not implemented yet`. The bare specifier
+resolves under both Turbopack and webpack, so no pipeline needs the
+`require.resolve` form.
 
-`root` **must** be the project root the emitted paths should be relative to
-(usually `__dirname`); files outside it are skipped rather than stamped with a
-`..` path.
+Set `root` to the project root your emitted paths should be relative to, usually
+`__dirname`. Files outside it are skipped rather than stamped with a `..` path.
 
-### Turbopack (the `next dev` default since Next 16)
+### Turbopack, the `next dev` default since Next 16
 
-Turbopack reads the **same** `experimental.swcPlugins` entry — the config above
-covers both pipelines. No separate loader is needed.
+Turbopack reads the same `experimental.swcPlugins` entry, so the config above
+covers both pipelines and you need no separate loader.
 
 The two bundlers hand the plugin different filename shapes, and it handles both:
 
 | Bundler | `Filename` context | Handling |
 |---|---|---|
 | webpack / `@swc/core` | absolute (`/proj/app/page.tsx`) | `root` stripped off the front |
-| Turbopack | **already project-root-relative** (`app/page.tsx`) | used as-is |
+| Turbopack | already project-root-relative (`app/page.tsx`) | used as-is |
 
-Both produce identical coordinates. A path that escapes `root` — absolute and
-outside it, or relative and climbing above it — is refused rather than stamped
-with a `..` the resolver would reject.
+Both produce identical coordinates. A path that escapes `root`, whether absolute
+and outside it or relative and climbing above it, gets refused rather than
+stamped with a `..` the resolver would reject.
 
-> **Fixed after 0.1.0.** Before the fix, the relative form was fed to
-> `Path::strip_prefix`, which failed, so the plugin stamped **nothing at all**
-> under Turbopack — silently, with a successful build and an HTTP 200. That is
-> why every bail now emits a warning (below).
+> **Fixed after 0.1.0.** Earlier versions fed the relative form to
+> `Path::strip_prefix`, which failed, so the plugin stamped nothing at all under
+> Turbopack. The build succeeded, the page returned 200, and no warning appeared.
+> Every bail now emits a diagnostic, which is why the section below exists.
 
-> **Version note (verify against your Next version):** wasm SWC plugin support
-> in Turbopack landed during the Next 15 line and is still evolving. On a Next
-> release where Turbopack ignores `swcPlugins` entirely, precise editing falls
-> back to the text-search resolver (zero behavior change, just less precision).
+> **Check this against your Next version.** Support for wasm SWC plugins in
+> Turbopack landed during the Next 15 line and is still moving. On a release
+> where Turbopack ignores `swcPlugins`, precise editing falls back to the
+> text-search resolver with no change in behaviour, only less precision.
 > PortBay's `loc_detect` reports which pipeline is active.
 
-### When it decides not to stamp, it says so
+### It tells you when it declines to stamp
 
-If the plugin is enabled but cannot turn a file into a root-relative path, it
-emits a warning naming the reason, the configured `root`, and the filename it
-was handed — on the plugin's `HANDLER` diagnostic channel *and* on the wasm
-sandbox's stderr. Two channels because whether a `HANDLER` warning is ever
-printed is the host's decision (`@swc/core`'s Node binding buffers plugin
-diagnostics and drops them when the transform succeeds; stderr gets through).
+When the plugin is enabled but cannot turn a file into a root-relative path, it
+names the reason, the configured `root` and the filename it was handed. It writes
+that to the plugin's `HANDLER` diagnostic channel and to the wasm sandbox's
+stderr, because the host decides whether a `HANDLER` warning is ever printed:
+`@swc/core`'s Node binding buffers plugin diagnostics and drops them when the
+transform succeeds, while stderr gets through.
 
-The commonest cause is a `root` that is not the directory the bundler's
-filenames are relative to. The warning fires per refused file: swc instantiates
-a fresh wasm module per transform, so no plugin-side state survives to
-de-duplicate it.
+Usually the cause is a `root` that is not the directory your bundler's filenames
+are relative to. The warning fires once per refused file. SWC instantiates a
+fresh wasm module per transform, so no state survives to deduplicate it.
 
-## swc_core ↔ Next compatibility (important)
+## swc_core and Next compatibility
 
-An SWC wasm plugin is ABI-coupled to the SWC compiler that loads it. The host
-that matters is **`@next/swc`** — the compiler Next.js bundles for `next dev` /
-`next build` — **not** the standalone `@swc/core` on npm (Next does not use it,
-and it lags `@next/swc`). This blob is built against:
+An SWC wasm plugin is ABI-coupled to the compiler that loads it. The host that
+matters is `@next/swc`, which Next bundles for `next dev` and `next build`, not
+the standalone `@swc/core` on npm. Next does not use that one, and it lags
+`@next/swc`. This blob is built against:
 
 | Property | Value |
 |---|---|
@@ -131,41 +127,44 @@ and it lags `@next/swc`). This blob is built against:
 | `swc_ecma_ast` | `25.0.0` |
 | Plugin schema | `__plugin_transform_schema_v1` |
 
-### Verified compatibility
+### What we have verified
 
 | Host | Result |
 |---|---|
-| **Next.js 16.3.0 default (Turbopack)** | **Works at 0.1.1** (2026-08-13) — verified end-to-end against a live `next dev`: served HTML carries byte-accurate `data-pb-loc`. Under **0.1.0** the same app served HTTP 200 with **zero** stamps |
-| **Next.js 16.3.0** (`next dev --webpack`) | **Works at 0.1.1** (2026-08-13) — served HTML `data-pb-loc` set is identical to the Turbopack run |
-| **Next.js 16.2.x** (webpack lane) | **Works** (2026-07-04) — `data-pb-loc` stamped in the rendered DOM, byte-accurate |
-| **Standalone `@swc/core` 1.15.47** | **Works** (2026-07-31) — loads and stamps; the earlier "AST schema not compatible" no-op no longer reproduces on this version |
-| Standalone `@swc/core` ≤ 1.14.x | Hard error — `failed to invoke plugin` |
+| Next.js 16.3.0, default Turbopack | Works at 0.1.1 (2026-08-13). Checked end-to-end against a live `next dev`: the served HTML carries byte-accurate `data-pb-loc`. Under 0.1.0 the same app returned 200 with zero stamps |
+| Next.js 16.3.0, `next dev --webpack` | Works at 0.1.1 (2026-08-13). The served `data-pb-loc` set matches the Turbopack run exactly |
+| Next.js 16.2.x, webpack lane | Works (2026-07-04). Byte-accurate stamps in the rendered DOM |
+| Standalone `@swc/core` 1.15.47 | Works (2026-07-31). Loads and stamps; the earlier "AST schema not compatible" no-op no longer reproduces |
+| Standalone `@swc/core` 1.14.x and below | Hard error, `failed to invoke plugin` |
 
-### Two failure modes
+### Two ways it can fail
 
-- **Host older than the blob** → the compile fails loudly (`failed to invoke
-  plugin`).
-- **Host rejects the AST schema** (e.g. standalone `@swc/core`, or a Next that
-  bundles an older `@next/swc`) → the plugin is **silently skipped**: no stamp,
-  no error, `next` reports success. Precise editing then degrades to text search.
-  PortBay's browser bar detects this (installed + configured but no
-  `[data-pb-loc]` in the DOM) and shows a "wired but not active" warning.
+A host older than the blob fails the compile loudly with `failed to invoke
+plugin`.
 
-When your Next version bundles an `@next/swc` outside this blob's range, rebuild
-from source pinned to a matching `swc_core` (see <https://plugins.swc.rs/>), bump
-the minor, and re-verify. PortBay pins and rebuilds this blob per supported Next
-range; the version above is what ships in this package.
+A host that rejects the AST schema skips the plugin in silence. That covers
+standalone `@swc/core` and any Next bundling an older `@next/swc`. You get no
+stamp, no error, and a successful build, and precise editing quietly degrades to
+text search. PortBay's browser bar catches this case, since the plugin is
+installed and configured but no `[data-pb-loc]` appears in the DOM, and warns
+that it is wired but not active.
+
+If your Next version bundles an `@next/swc` outside this blob's range, rebuild
+from source against a matching `swc_core` (see <https://plugins.swc.rs/>), bump
+the minor version, and verify again. PortBay rebuilds and pins this blob per
+supported Next range; the version above is what ships here.
 
 ## Build from source
 
-Requires the Rust toolchain and the wasm target:
+You need the Rust toolchain and the wasm target:
 
 ```bash
 rustup target add wasm32-wasip1
-pnpm build      # cargo build --release + copy the .wasm to the package root
-pnpm test       # cargo test — the parity suite (mirrors the babel vitest cases)
+pnpm build      # cargo build --release, then copy the .wasm to the package root
+pnpm test       # cargo test, the parity suite
 ```
 
 ## License
 
-MIT © Tribal House LLC. Independent implementation; no third-party plugin code.
+MIT © Tribal House LLC. Independent implementation, containing no third-party
+plugin code.

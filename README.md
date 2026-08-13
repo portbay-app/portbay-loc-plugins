@@ -1,88 +1,91 @@
 # PortBay source-location plugins
 
-Dev-time build instrumentation that stamps each rendered element with its
-**authored source location** — `data-pb-loc="<file>:<line>:<col>"` — so PortBay's
-visual editor can resolve a clicked element back to the exact span in your source
-files instead of guessing with a text search.
+These plugins stamp every rendered element with the place it was written,
+`data-pb-loc="<file>:<line>:<col>"`, so PortBay's visual editor can open the exact
+span you clicked. Without them the editor searches your source for matching text,
+which works but resolves fewer elements.
 
 | Package | Registry | Pipeline | Covers |
 |---|---|---|---|
-| [`@portbay/swc-plugin-loc`](packages/swc-plugin-loc) | npm | SWC / Turbopack | Next.js (JSX/TSX), webpack **and** Turbopack |
-| [`portbay/blade-stamper`](packages/blade-stamper) | — (unpublished) | Laravel Blade compiler | `.blade.php` templates |
+| [`@portbay/swc-plugin-loc`](packages/swc-plugin-loc) | npm | SWC / Turbopack | Next.js (JSX/TSX), webpack and Turbopack |
+| [`portbay/blade-stamper`](packages/blade-stamper) | not yet published | Laravel Blade compiler | `.blade.php` templates |
 
-## Vite, Astro, Vue, Svelte — nothing to install
+## Vite, Astro, Vue and Svelte need no install
 
-There is no `@portbay/vite-plugin-loc` on npm, and that is deliberate.
+You will not find `@portbay/vite-plugin-loc` on npm. PortBay ships that plugin
+inside the application and loads it by absolute path from a config it generates,
+so your `package.json`, `node_modules` and `vite.config` are byte-identical
+before and after. You install nothing.
 
-PortBay injects its own Vite loc plugin into the dev server it launches, loaded
-by absolute path from a generated config. Your project — `package.json`,
-`node_modules`, `vite.config` — is byte-identical before and after. That plugin
-lives inside the PortBay application, not here, precisely so the promise holds:
-**you install nothing.**
+An npm-shaped copy of it once lived here. We removed it when the injected
+version took over, because two implementations of one thing drift apart and
+nobody notices until a coordinate is wrong. A Babel stamper went the same way:
+PortBay does not own your `babel.config.js`, so the Babel lane now names what it
+cannot do instead of prescribing an install that would not work. Both are still
+in git history.
 
-An earlier npm-shaped copy of it lived in this repo and was removed once the
-injected version superseded it; a second implementation that nothing consumed was
-only ever going to drift. Same for a Babel stamper: PortBay does not own
-`babel.config.js`, so the Babel lane refuses by name and states what still works
-rather than prescribing an install. Both remain in this repo's git history.
+## The attribute
 
-## What it does
-
-Each **host** element carries its origin as a DOM attribute:
+Every host element carries where it came from:
 
 ```html
 <button data-pb-loc="src/components/Hero.jsx:42:7">Get started</button>
 ```
 
-- `file` — project-root-relative, POSIX.
-- `line` — **1-based** line of the element's opening `<` in the authored source.
-- `col` — **1-based** column of that `<` (a tie-breaker; the resolver anchors on
-  the line + tag name).
+`file` is project-root-relative and POSIX. `line` is the 1-based line of the
+element's opening `<`. `col` is the 1-based column of that same `<`, used to
+break ties; the resolver matches on line plus tag name.
 
-### Component call sites — `data-pb-comp` (React/JSX only)
+### Component call sites, React and JSX only
 
-A React **Component** (`<Hero title="…" />`) renders no DOM node of its own, so
-it cannot carry a DOM attribute. Instead the JSX/TSX stamper stamps the **call
-site** as a prop, `data-pb-comp="<relpath>:<line>:<col>"`, pointing at the
-opening `<` of the `<Hero …>` tag in the authored source:
+`<Hero title="…" />` renders no DOM node of its own, so it cannot carry an
+attribute. The JSX stamper instead passes the call site as a prop,
+`data-pb-comp="<relpath>:<line>:<col>"`, pointing at the opening `<` of the
+`<Hero …>` tag you wrote:
 
 ```jsx
-// authored:  src/App.jsx, line 7
+// you wrote, in src/App.jsx line 7:
 <Hero title="Welcome" count={3} />
-// compiled (dev):
+// dev build emits:
 jsxDEV(Hero, { title: "Welcome", count: 3, "data-pb-comp": "src/App.jsx:7:3" }, …)
 ```
 
-React copies enumerable props into the component fiber's `memoizedProps`
-(verified against react@18.3.1 and react@19.2.5 dev bundles), so PortBay reads
-the call-site coordinate off the resolved component fiber at runtime — a genuine
-**source** coordinate, with no runtime sourcemap reversal. Because it is a
-`data-*` prop, a wrapper that spreads `{...props}` onto a host element leaks it
-to the DOM harmlessly and warning-free (React passes `data-*`/`aria-*` through
-untouched).
+React copies enumerable props into the fiber's `memoizedProps`, which we checked
+against the react@18.3.1 and react@19.2.5 dev bundles, so PortBay reads the
+coordinate off the resolved fiber at runtime. That gives it a real source
+position with no sourcemap reversal, and lets you edit a component's literal
+props where you wrote them. Since it is a `data-*` prop, a wrapper that spreads
+`{...props}` onto a host element passes it to the DOM harmlessly; React forwards
+`data-*` and `aria-*` untouched.
 
-Member (`<Foo.Bar>`) and namespaced component tags are a v1 gap.
+Member tags like `<Foo.Bar>` and namespaced tags are not stamped yet.
 
-PortBay's resolver opens the authored file at that coordinate, verifies identity
-(the captured original text/class is still present), and patches the one element
-— so React `className`, `.map()` / `v-for` repeated copies, and scoped-component
-styles all resolve deterministically. When the attribute is absent, PortBay falls
-back to its text-search resolver with **zero behavior change**.
+PortBay opens the file at that coordinate, checks the element is still the one it
+captured, and patches that single element. React `className`, repeated `.map()`
+or `v-for` copies, and scoped component styles all resolve without guessing. Drop
+the attribute and PortBay falls back to text search with no change in behaviour.
 
-## Dev-only, by design
+## Development only
 
-The attribute is emitted **only in development** (`NODE_ENV !== 'production'`, or
-set `PORTBAY_LOC=1` to force it). It never reaches a production bundle — no DOM
-bloat, no leaking of local file paths.
+The plugins stamp only outside production. They read `NODE_ENV`, and PortBay
+passes an explicit `enabled` flag when it wires them, so nothing reaches a
+production bundle: no extra DOM, no source paths in shipped HTML.
 
-## Install — Next.js
+> **`PORTBAY_LOC=1` overrides that check.** It exists so you can debug the
+> stamper in an environment that reports itself as production, and it is not safe
+> to leave on. Anything you serve with it set publishes your file names, your
+> directory layout and your line numbers to whoever loads the page. Use it on a
+> machine you control, then unset it. The SWC plugin has no such variable, since
+> wasm plugins cannot read `process.env`.
+
+## Installing for Next.js
 
 ```bash
 npm add -D @portbay/swc-plugin-loc
 ```
 
 ```js
-// next.config.js — dev only; `next dev --turbopack` reads the same key
+// next.config.js. Dev only; `next dev --turbopack` reads the same key.
 module.exports = {
   experimental: {
     swcPlugins: [
@@ -92,15 +95,17 @@ module.exports = {
 }
 ```
 
-The first element **must be the bare package specifier**. `require.resolve(...)`
-returns an absolute filesystem path, and Turbopack resolves the `swcPlugins`
-entry as a *module specifier* — an absolute path fails the compile outright with
-`Module not found: … server relative imports are not implemented yet`. The bare
-specifier resolves correctly under **both** Turbopack and webpack.
+Pass the bare package specifier as the first element. `require.resolve(...)`
+hands back an absolute path, and Turbopack treats that entry as a module
+specifier, so an absolute path breaks the compile with `Module not found: …
+server relative imports are not implemented yet`. The bare specifier works under
+both Turbopack and webpack.
 
-`root` must be the project root the emitted paths are relative to; files outside
-it are skipped rather than stamped with a path that escapes the project.
+Set `root` to the directory your emitted paths should be relative to. The plugin
+skips files outside it rather than writing a path that climbs out of your
+project.
 
 ## License
 
-MIT © Tribal House LLC. Independent implementation; no third-party plugin code.
+MIT © Tribal House LLC. Independent implementation, containing no third-party
+plugin code.

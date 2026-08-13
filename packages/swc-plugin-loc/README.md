@@ -48,18 +48,16 @@ pnpm add -D @portbay/swc-plugin-loc
 The package ships a prebuilt `portbay_swc_plugin_loc.wasm`; **no Rust toolchain
 is required to consume it**. (Building from source does — see below.)
 
-### `next dev` (default, webpack + SWC)
+### Config — one entry, both bundlers
 
 ```js
 // next.config.js
-const path = require('node:path');
-
 /** @type {import('next').NextConfig} */
 module.exports = {
   experimental: {
     swcPlugins: [
       [
-        require.resolve('@portbay/swc-plugin-loc'),
+        '@portbay/swc-plugin-loc',
         { root: __dirname, enabled: process.env.NODE_ENV !== 'production' },
       ],
     ],
@@ -67,9 +65,17 @@ module.exports = {
 };
 ```
 
-`require.resolve(...)` resolves to the package's `.wasm` (its `main`). `root`
-**must** be the project root the emitted paths should be relative to (usually
-`__dirname`); files outside it are skipped rather than stamped with a `..` path.
+The first element **must be the bare package specifier**, not
+`require.resolve('@portbay/swc-plugin-loc')`. `require.resolve` returns an
+absolute filesystem path, and Turbopack resolves the `swcPlugins` entry as a
+*module specifier*: on Next 16.3.0 an absolute path fails the compile outright
+with `Module not found: … server relative imports are not implemented yet`.
+The bare specifier is resolved correctly by **both** Turbopack and webpack, so
+there is no pipeline that wants the `require.resolve` form.
+
+`root` **must** be the project root the emitted paths should be relative to
+(usually `__dirname`); files outside it are skipped rather than stamped with a
+`..` path.
 
 ### Turbopack (the `next dev` default since Next 16)
 
@@ -129,8 +135,9 @@ and it lags `@next/swc`). This blob is built against:
 
 | Host | Result |
 |---|---|
+| **Next.js 16.3.0 default (Turbopack)** | **Works at 0.1.1** (2026-08-13) — verified end-to-end against a live `next dev`: served HTML carries byte-accurate `data-pb-loc`. Under **0.1.0** the same app served HTTP 200 with **zero** stamps |
+| **Next.js 16.3.0** (`next dev --webpack`) | **Works at 0.1.1** (2026-08-13) — served HTML `data-pb-loc` set is identical to the Turbopack run |
 | **Next.js 16.2.x** (webpack lane) | **Works** (2026-07-04) — `data-pb-loc` stamped in the rendered DOM, byte-accurate |
-| Next.js 16.2.x default (Turbopack) | Was a silent path-resolution failure at 0.1.0; **fixed**, but **not yet re-verified against a live Next 16 dev server** — only against the same relative-filename shape driven through `@swc/core` |
 | **Standalone `@swc/core` 1.15.47** | **Works** (2026-07-31) — loads and stamps; the earlier "AST schema not compatible" no-op no longer reproduces on this version |
 | Standalone `@swc/core` ≤ 1.14.x | Hard error — `failed to invoke plugin` |
 

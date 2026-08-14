@@ -8,7 +8,7 @@ which works but resolves fewer elements.
 | Package | Registry | Pipeline | Covers |
 |---|---|---|---|
 | [`@portbay/swc-plugin-loc`](packages/swc-plugin-loc) | npm | SWC / Turbopack | Next.js (JSX/TSX), webpack and Turbopack |
-| [`portbay/blade-stamper`](packages/blade-stamper) | not yet published | Laravel Blade compiler | `.blade.php` templates |
+| [`portbay/blade-stamper`](https://github.com/portbay-app/blade-stamper) | its own repo | Laravel Blade compiler | `.blade.php` templates |
 
 Blade lives in its own repository. Composer resolves a package from the repository
 root and cannot read one nested under `packages/`, so `portbay/blade-stamper` was

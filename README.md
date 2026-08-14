@@ -10,6 +10,11 @@ which works but resolves fewer elements.
 | [`@portbay/swc-plugin-loc`](packages/swc-plugin-loc) | npm | SWC / Turbopack | Next.js (JSX/TSX), webpack and Turbopack |
 | [`portbay/blade-stamper`](packages/blade-stamper) | not yet published | Laravel Blade compiler | `.blade.php` templates |
 
+Blade lives in its own repository. Composer resolves a package from the repository
+root and cannot read one nested under `packages/`, so `portbay/blade-stamper` was
+split out to <https://github.com/portbay-app/blade-stamper> with its git history
+intact. That repo is its home; this one keeps the JS side.
+
 ## Vite, Astro, Vue and Svelte need no install
 
 You will not find `@portbay/vite-plugin-loc` on npm. PortBay ships that plugin

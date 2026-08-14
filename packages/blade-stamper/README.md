@@ -63,12 +63,42 @@ in shipped HTML.
 > layout and your line numbers to whoever loads the page. Use it on a machine you
 > control, then unset it.
 
+### `PORTBAY_LOC` and `php artisan serve`
+
+Put `PORTBAY_LOC` in your **`.env`**, not in the shell. `php artisan serve`
+deletes every environment variable that is not on Laravel's own
+`ServeCommand::$passthroughVariables` list (`APP_ENV`, `PATH`, the Herd and
+Xdebug variables, and little else) before it starts the built-in web server, so
+
+```bash
+PORTBAY_LOC=0 php artisan serve      # does NOT disable the stamper
+```
+
+is a silent no-op: the server process never sees the variable and the stamper
+keeps emitting. `PORTBAY_LOC=0` in `.env` works, and so does
+`php artisan serve --no-reload`, which passes the whole environment through.
+Under php-fpm, nginx, Octane, Sail or Herd the shell variable is honoured
+normally — this is an `artisan serve` behaviour, not a stamper one.
+
 ## Requirements
 
 - PHP >= 8.1
-- Laravel 11 or 12 (`illuminate/view` ^11 || ^12). `prepareStringsForCompilationUsing`
-  arrived in Laravel 10.15; on an older compiler the provider no-ops and
-  PortBay's text-search resolver stays in effect.
+- Laravel 11, 12 or 13 (`illuminate/view` ^11 || ^12 || ^13).
+  `prepareStringsForCompilationUsing` arrived in Laravel 10.15; on an older
+  compiler the provider no-ops and PortBay's text-search resolver stays in
+  effect.
+
+## Verified
+
+Against real scaffolded apps, on the **served HTML** rather than on unit tests
+alone: Laravel 11.55.1, 12.66.0 and 13.25.0 (PHP 8.3.33) all serve
+byte-identical stamped markup, and every emitted `data-pb-loc` was checked back
+against the authored `.blade.php` at that exact line and column.
+
+The stamper runs on **every** Blade view the app compiles, framework views
+included — a Laravel error page comes back stamped with `vendor/...`
+coordinates. That is inert for rendering, but a click on one resolves into
+`vendor/`.
 
 ## Test
 

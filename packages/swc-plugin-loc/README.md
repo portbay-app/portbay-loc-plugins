@@ -123,16 +123,19 @@ the standalone `@swc/core` on npm. Next does not use that one, and it lags
 
 | Property | Value |
 |---|---|
-| `swc_core` | `71.0.3` |
-| `swc_ecma_ast` | `25.0.0` |
+| `swc_core` | `79.0.0` |
+| `swc_ecma_ast` | `29.0.2` |
 | Plugin schema | `__plugin_transform_schema_v1` |
 
 ### What we have verified
 
 | Host | Result |
 |---|---|
-| Next.js 16.3.0, default Turbopack | Works at 0.1.1 (2026-08-13). Checked end-to-end against a live `next dev`: the served HTML carries byte-accurate `data-pb-loc`. Under 0.1.0 the same app returned 200 with zero stamps |
-| Next.js 16.3.0, `next dev --webpack` | Works at 0.1.1 (2026-08-13). The served `data-pb-loc` set matches the Turbopack run exactly |
+| Next.js 16.4.3, default Turbopack | Works at 0.2.0 (2026-11-18). Live `next dev`: `/login` returns 200 and the served HTML carries `data-pb-loc` on every host element, each column on the opening `<`. 0.1.1 returns 500 there (`Failed to deserialize program received from host`) |
+| Next.js 16.4.3, `next dev --webpack` | Works at 0.2.0 (2026-11-18). Same 16 stamps as the Turbopack run |
+| Next.js 16.3.0 | Needs 0.1.1. The 0.2.0 blob fails the compile with `Failed to deserialize program received from host`, so stay on 0.1.x there |
+| Next.js 16.3.0, default Turbopack | Works at 0.1.1 (2026-08-13), not at 0.2.0. Checked end-to-end against a live `next dev`: the served HTML carries byte-accurate `data-pb-loc`. Under 0.1.0 the same app returned 200 with zero stamps |
+| Next.js 16.3.0, `next dev --webpack` | Works at 0.1.1 (2026-08-13), not at 0.2.0. The served `data-pb-loc` set matches the Turbopack run exactly |
 | Next.js 16.2.x, webpack lane | Works (2026-07-04). Byte-accurate stamps in the rendered DOM |
 | Standalone `@swc/core` 1.15.47 | Works (2026-07-31). Loads and stamps; the earlier "AST schema not compatible" no-op no longer reproduces |
 | Standalone `@swc/core` 1.14.x and below | Hard error, `failed to invoke plugin` |

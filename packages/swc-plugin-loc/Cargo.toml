@@ -1,6 +1,6 @@
 [package]
 name = "portbay-swc-plugin-loc"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -21,7 +21,7 @@ strip = true
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-swc_core = { version = "71.0.3", features = ["ecma_plugin_transform"] }
+swc_core = { version = "79.0.0", features = ["ecma_plugin_transform"] }
 
 [dev-dependencies]
-swc_core = { version = "71.0.3", features = ["ecma_parser", "ecma_codegen", "common", "ecma_ast", "ecma_visit"] }
+swc_core = { version = "79.0.0", features = ["ecma_parser", "ecma_codegen", "common", "ecma_ast", "ecma_visit"] }
